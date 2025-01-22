@@ -1,6 +1,4 @@
 <resources>
-    <string name="app_name">pdfViewer</string>
-    <string name="pdfView_page_no" translatable="false">%1$s / %2$s</string>
-    <string name="title_activity_compose">ComposeActivity</string>
-
+    <string name="app_name">Kodex</string>
+    <string name="kodex_page_nb_format" translatable="false">%1$s / %2$s</string>
 </resources>

@@ -13,6 +13,6 @@ dependencyResolutionManagement {
     }
 }
 
-include (":app")
-include (":pdfViewer")
-rootProject.name = "androidpdfviewer"
+include(":app")
+include(":kodex")
+rootProject.name = "Kodex"
