@@ -7,6 +7,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -16,14 +18,13 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -38,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.center
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerInputScope
@@ -46,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.util.fastAny
 import fr.openium.kodex.KodexPdfRenderer
 import fr.openium.kodex.TAG
@@ -78,8 +81,9 @@ fun Kodex(
     var kodexPdfRenderer by remember { mutableStateOf<KodexPdfRenderer?>(null) }
     var totalPageCount by remember { mutableIntStateOf(0) }
 
-    val scale = remember { Animatable(MIN_SCALE) }
+    val scale = remember { Animatable(MIN_SCALE, visibilityThreshold = 1f) }
     val offsetX = remember { Animatable(0f) }
+    val offsetY = remember { Animatable(0f) }
     val verticalOverflow = remember { Animatable(0f) }
     val lazyListState = rememberLazyListState()
 
@@ -106,30 +110,30 @@ fun Kodex(
             scope.cancel()
         }
     }
+
     Box(
         modifier = modifier
-            .fillMaxSize()
+            .width(100.dp)
             .clipToBounds()
             .pointerInput(Unit) {
-                var offsetY = 0f
                 detectTransformGesturesWithoutConsume(
                     onGesture = { centroid, pan, zoom, _ ->
                         scope.launch {
-                            val maxOffsetX = (size.width * scale.value - size.width) / 2
-                            val maxOffsetY = (size.height * scale.value - size.height) / 2
-
                             val targetScale = (scale.value * zoom).coerceIn(MIN_SCALE, MAX_SCALE)
                             val scaleChange = targetScale / scale.value
 
-                            val centroidX = (centroid.x - size.width / 2) * targetScale
-                            val focalAdjustmentX = (centroidX - offsetX.value) * (1 - scaleChange)
-                            val targetOffsetX = (offsetX.value + pan.x + focalAdjustmentX).coerceIn(-maxOffsetX, maxOffsetX)
-
-                            val centroidY = (centroid.y - size.height / 2)
-                            val focalAdjustmentY = (centroidY - offsetY) * (1 - scaleChange)
-                            val targetOffsetY = (offsetY + pan.y + focalAdjustmentY).coerceIn(-maxOffsetY, maxOffsetY)
+                            val maxOffsetX = (size.width * targetScale - size.width) / 2
+                            val maxOffsetY = (size.height * targetScale - size.height) / 2
 
                             val targetVerticalOverflow = computeVerticalOverflow(size = size, targetScale = targetScale)
+                            val verticalOverflowDelta = verticalOverflow.value - targetVerticalOverflow
+
+                            val center = size.toSize().center
+                            val offset = Offset(x = offsetX.value, y = offsetY.value)
+                            val targetOffset = offset * scaleChange - (centroid - center) * (scaleChange - 1) + pan
+
+                            val centroidY = (centroid.y - center.y) * (scaleChange - 1)
+                            val scrollDelta = (centroidY / targetScale) - verticalOverflowDelta - pan.y
 
                             val jobs = buildList {
                                 add(
@@ -144,14 +148,15 @@ fun Kodex(
                                 )
                                 add(
                                     launch {
-                                        offsetX.snapTo(targetValue = targetOffsetX)
+                                        offsetX.snapTo(targetValue = targetOffset.x.coerceIn(-maxOffsetX, maxOffsetX))
                                     }
                                 )
                                 if (scaleChange != 1f) {
                                     add(
                                         launch {
                                             lazyListState.scrollBy(
-                                                value = -(targetOffsetY - offsetY)
+                                                value = scrollDelta,
+                                                priority = MutatePriority.PreventUserInput
                                             )
                                         }
                                     )
@@ -160,7 +165,6 @@ fun Kodex(
 
                             // Wait for all animations to complete
                             jobs.joinAll()
-                            offsetY = targetOffsetY
                         }
                     },
                 )
@@ -173,13 +177,14 @@ fun Kodex(
                         scope.launch {
                             val targetScale = if (scale.value > MIN_SCALE) MIN_SCALE else DOUBLE_TAP_MAX_SCALE
                             val targetVerticalOverflow = computeVerticalOverflow(size = size, targetScale = targetScale)
+                            val maxOffsetX = (size.width * targetScale - size.width) / 2
 
                             // Calculate the target offsets based on the zoom target
                             val targetOffsetX = if (targetScale == MIN_SCALE) {
                                 0f
                             } else {
                                 -((tapOffset.x - size.width / 2) * targetScale)
-                            }
+                            }.coerceIn(-maxOffsetX, maxOffsetX)
                             targetScroll = if (targetScale == MIN_SCALE) {
                                 -targetScroll
                             } else {
@@ -317,6 +322,14 @@ private suspend fun PointerInputScope.detectTransformGesturesWithoutConsume(
             }
         } while (event.changes.fastAny { it.pressed })
     }
+}
+
+suspend fun ScrollableState.scrollBy(value: Float, priority: MutatePriority): Float {
+    var consumed = 0f
+    scroll(priority) {
+        consumed = scrollBy(value)
+    }
+    return consumed
 }
 
 @Composable
